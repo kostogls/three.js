@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - materials - shaders [lava]</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="container"></div>
+		<div id="info"><a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - shader material demo. featuring lava shader by <a href="http://irrlicht.sourceforge.net/phpBB2/viewtopic.php?t=21057" target="_blank" rel="noopener">TheGameMaker</a></div>
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			uniform float time;
+
+			uniform float fogDensity;
+			uniform vec3 fogColor;
+
+			uniform sampler2D texture1;
+			uniform sampler2D texture2;
+
+			varying vec2 vUv;
+
+			void main( void ) {
+
+				vec2 position = - 1.0 + 2.0 * vUv; // - 1.0 + 2.0
+
+				vec4 noise = texture2D( texture1, vUv );
+				vec2 T1 = vUv + vec2( 1.2, - 1.2 ) * time * 0.01;
+				vec2 T2 = vUv + vec2( - 1.5, 2.0 ) * time * 0.002; //( - 0.5, 2.0 ) * time * 0.005
+
+				T1.x += noise.x * 1.0; // 2.0
+				T1.y += noise.y * 1.0; // 2.0
+				T2.x -= noise.y * 0.1; //0.2
+				T2.y += noise.z * 0.1; //0.2
+
+				float p = texture2D( texture1, T1 * 2.0 ).a;
+
+				vec4 color = texture2D( texture2, T2 * 1.0 );
+				vec4 temp = color * ( vec4( p, p, p, p ) * 2.0 ) + ( color * color - 0.1 );
+
+				if( temp.r > 1.0 ) { temp.bg += clamp( temp.r - 2.0, 0.0, 100.0 ); }
+				if( temp.g > 1.0 ) { temp.rb += temp.g - 1.0; }
+				if( temp.b > 1.0 ) { temp.rg += temp.b - 1.0; }
+
+				gl_FragColor = temp;
+
+				float depth = gl_FragCoord.z / gl_FragCoord.w;
+				const float LOG2 = 1.442695; //1.442695
+				float fogFactor = exp2( - fogDensity * fogDensity * depth * depth * LOG2 );
+				fogFactor = 1.0 - clamp( fogFactor, 0.0, 1.0 );
+
+				gl_FragColor = 0.3 * mix( gl_FragColor, vec4( fogColor, gl_FragColor.w ), fogFactor );
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			uniform vec2 uvScale;
+			varying vec2 vUv;
+
+			void main()
+			{
+
+				vUv = uvScale * uv;
+				vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+				gl_Position = projectionMatrix * mvPosition;
+
+			}
+
+		</script>
+
+		<!-- Import maps polyfill -->
+		<!-- Remove this when import maps will be widely supported -->
+		<script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			import { EffectComposer } from './jsm/postprocessing/EffectComposer.js';
+			import { RenderPass } from './jsm/postprocessing/RenderPass.js';
+			import { FilmPass } from './jsm/postprocessing/FilmPass.js';
+			import { BloomPass } from './jsm/postprocessing/BloomPass.js';
+			import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+			import { RGBELoader } from './jsm/loaders/RGBELoader.js';
+			import { OrbitControls } from './jsm/controls/OrbitControls.js'
+
+
+			let camera, renderer, composer, clock;
+			let stemGeometry, blossomGeometry;
+			let stemMaterial, blossomMaterial;
+			let controls;
+
+			let uniforms_rocks, uniforms_gr, mesh;
+
+			init();
+			animate();
+
+			function init() {
+
+				const container = document.getElementById( 'container' );
+
+
+				camera = new THREE.PerspectiveCamera( 500, window.innerWidth / window.innerHeight, 1 , 300 ); //35 , 1, 3000
+				// camera.position.z = 6;
+				camera.position.set(0, 1, 5);
+
+				// camera.position.set( - 1, 1, 5 );
+				// camera.lookAt( new THREE.Vector3( 0, 2, 0 ) );
+
+				const scene = new THREE.Scene();
+				
+				var amb_light = new THREE.AmbientLight(0x0000F0); //ambiens fény
+				scene.add(amb_light);
+
+				const p_light = new THREE.PointLight( 0xff0000, 40, 100 );
+				const sphereSize = 1;
+				const pointLightHelper = new THREE.PointLightHelper( p_light, sphereSize );
+				scene.add( pointLightHelper );
+
+
+				p_light.position.set( 0, 10, 0 );
+				scene.add(p_light);
+
+				// background
+				const loader_bkg = new THREE.TextureLoader();
+				loader_bkg.load('textures/lava/redfog2.jpg' , function(texture_)
+				{
+				scene.background = texture_;  
+				});
+				// scene.background = new THREE.Color( 0xe0e0e0 );
+
+				{
+				const color = 0xFFFFFF;
+				const density = 0.1;
+				scene.fog = new THREE.FogExp2(color, density);
+				}
+
+				clock = new THREE.Clock();
+
+
+				const light_amb = new THREE.AmbientLight( 0x00ff00, 200 ); // soft white light
+				scene.add( light_amb );
+
+				const light = new THREE.PointLight( 0xffffff, 40, 100 );
+				light.position.set( 0, 10, 4 );
+				light.castShadow = true; // default false
+				scene.add( light );
+				
+				//Set up shadow properties for the light
+				light.shadow.mapSize.width = 512; // default
+				light.shadow.mapSize.height = 512; // default
+				light.shadow.camera.near = 0.5; // default
+				light.shadow.camera.far = 500; // default
+
+				//Create a sphere that cast shadows (but does not receive them)
+				const sphereGeometry = new THREE.SphereGeometry( 5, 32, 32 );
+				const sphereMaterial = new THREE.MeshStandardMaterial( { color: 0xff0000 } );
+				const sphere = new THREE.Mesh( sphereGeometry, sphereMaterial );
+				sphere.castShadow = true; //default is false
+				sphere.receiveShadow = false; //default
+				scene.add( sphere );
+
+				//Create a plane that receives shadows (but does not cast them)
+				const planeGeometry = new THREE.PlaneGeometry( 20, 20, 32, 32 );
+				const planeMaterial = new THREE.MeshStandardMaterial( { color: 0x00ff00 } )
+				const plane_ = new THREE.Mesh( planeGeometry, planeMaterial );
+				plane_.receiveShadow = true;
+				scene.add( plane_ );
+
+
+
+				// shadows
+
+				
+				// const renderer_shadow = new THREE.WebGLRenderer();
+
+				// renderer_shadow.shadowMap.enabled = true;
+				// renderer_shadow.shadowMap.type = THREE.PCFSoftShadowMap; // default THREE.PCFShadowMap
+
+				// //Create a PointLight and turn on shadows for the light
+				// const light = new THREE.PointLight( 0xffffff, 1, 100 );
+				// light.position.set( 0, 10, 4 );
+				// light.castShadow = true; // default false
+				// scene.add( light );
+
+				// //Set up shadow properties for the light
+				// light.shadow.mapSize.width = 512; // default
+				// light.shadow.mapSize.height = 512; // default
+				// light.shadow.camera.near = 0.5; // default
+				// light.shadow.camera.far = 500; // default
+
+
+				const textureLoader = new THREE.TextureLoader();
+				// uniforms and shader material for rocks 
+				uniforms_rocks = {
+
+					'fogDensity': { value: 0.5 }, //0.45
+					'fogColor': { value: new THREE.Vector3( 0, 0, 0 ) },
+					'time': { value: 0.1 }, //1.0
+					'uvScale': { value: new THREE.Vector2( 3.0, 1.0 ) }, //3.0
+					'texture1': { value: textureLoader.load( 'textures/lava/cloud.png' ) },
+					'texture2': { value: textureLoader.load( 'textures/lava/de2qwas-c85e5dad-dfd6-47b2-97ee-570467efe78d.jpg' ) }
+
+				};
+
+				uniforms_rocks[ 'texture1' ].value.wrapS = uniforms_rocks[ 'texture1' ].value.wrapT = THREE.RepeatWrapping;
+				uniforms_rocks[ 'texture2' ].value.wrapS = uniforms_rocks[ 'texture2' ].value.wrapT = THREE.RepeatWrapping;
+
+				// const size = 0.0001;
+
+				const material_rocks = new THREE.ShaderMaterial( {
+
+					uniforms: uniforms_rocks,
+					vertexShader: document.getElementById( 'vertexShader' ).textContent,
+					fragmentShader: document.getElementById( 'fragmentShader' ).textContent
+
+				} );
+
+				// // uniforms and shader material for ground 
+				const textureLoader_gr = new THREE.TextureLoader();
+
+				uniforms_gr = {
+
+					'fogDensity': { value: 0.5 }, //0.45
+					'fogColor': { value: new THREE.Vector3( 0, 0, 0 ) },
+					'time': { value: 0.1 }, //1.0
+					'uvScale': { value: new THREE.Vector2( 3.0, 1.0 ) }, //3.0
+					'texture1': { value: textureLoader_gr.load( 'textures/lava/cloud.png' ) },
+					'texture2': { value: textureLoader_gr.load( 'textures/lava/de2qwas-c85e5dad-dfd6-47b2-97ee-570467efe78d.jpg' ) }
+
+					};
+
+				uniforms_gr[ 'texture1' ].value.wrapS = uniforms_gr[ 'texture1' ].value.wrapT = THREE.RepeatWrapping;
+				uniforms_gr[ 'texture2' ].value.wrapS = uniforms_gr[ 'texture2' ].value.wrapT = THREE.RepeatWrapping;
+				uniforms_gr[ 'texture2' ].value.repeat.set(32, 16)
+
+				const material_gr = new THREE.ShaderMaterial( {
+
+				uniforms: uniforms_gr,
+				vertexShader: document.getElementById( 'vertexShader' ).textContent,
+				fragmentShader: document.getElementById( 'fragmentShader' ).textContent
+
+				} );
+
+				//texture for ground
+				var texture_ground = new THREE.TextureLoader().load("textures/lava/de2qwas-c85e5dad-dfd6-47b2-97ee-570467efe78d.jpg");
+				texture_ground.wrapS = THREE.RepeatWrapping;
+				texture_ground.wrapT = THREE.RepeatWrapping;
+				texture_ground.repeat.set( 32, 16);
+
+				// ground 
+
+				var geo = new THREE.PlaneBufferGeometry(300, 300, 6, 6);
+				// var mat = new THREE.MeshBasicMaterial({  map : texture_ground});
+				var plane = new THREE.Mesh(geo, material_gr );
+				plane.rotateX(- Math.PI / 4);
+				
+				scene.add(plane);
+		
+				mesh = new THREE.Mesh( new THREE.BoxGeometry( 1000, 1000 ), material_rocks);
+
+
+				// mesh.rotation.x = 0.5;
+				// scene.add( mesh );
+								
+				// const loader = new GLTFLoader()
+				// loader.load('./models/gltf/rock1.glb', function(glb){
+				// 	console.log(glb);
+				// 	glb.scene.children[0].material = material;
+
+				// 	scene.add(glb.scene);
+				// })
+				// const loader = new GLTFLoader();
+
+				// load multiple models
+
+				// function loadModel(url) {
+				// return new Promise(resolve => {
+				// 	new GLTFLoader().load(url, resolve);
+				// });
+				// }
+
+				// let model1, model2, model3;
+
+				// let p1 = loadModel('./models/gltf/rock1.glb').then(result => {  model1 = result.scene.children[0];});
+				// let p2 = loadModel('./models/gltf/rock2.glb').then(result => { model2 = result.scene.children[0];});
+				// let p3 = loadModel('./models/gltf/rock3.glb').then(result => { model3 = result.scene.children[0]});
+
+				// 				//if all Promises resolved 
+				// Promise.all([p1,p2,p3]).then(() => {
+				// //do something to the model
+				// model1.position.set(0,0,0);
+				// model2.position.set(0,20,0);
+				// model3.position.set(0,50,0);
+
+				// //add model to the scene
+				// scene.add(model1);
+				// scene.add(model2);
+				// scene.add(model3);
+				
+			
+				// });
+
+				// load 2 models
+				//load first model
+				new GLTFLoader().load('./models/gltf/rock3.glb', function(glb){
+					console.log(glb);
+					glb.scene.children[0].material = material_rocks;
+					glb.scene.position.set(3,0,1)
+					scene.add(glb.scene);})
+				
+				//load another model
+				new GLTFLoader().load('./models/gltf/rock5.glb', function(glb_){
+					console.log(glb_);
+					glb_.scene.children[0].material = material_rocks;
+					glb_.scene.position.set(-2,-1,0)
+					scene.add(glb_.scene);})
+
+				
+				new GLTFLoader().load('./models/gltf/rock4.glb', function(glb_1){
+					console.log(glb_1);
+					glb_1.scene.children[0].material = material_rocks;
+					glb_1.scene.position.set(1,1,1)
+					scene.add(glb_1.scene);})
+				
+				new GLTFLoader().load('./models/gltf/rock1.glb', function(glb_2){
+					console.log(glb_2);
+					glb_2.scene.children[0].material = material_rocks;
+					glb_2.scene.position.set(2,1,1)
+					scene.add(glb_2.scene);})
+				
+				new GLTFLoader().load('./models/gltf/lying_rock.glb', function(glb_3){
+					console.log(glb_3);
+					glb_3.scene.children[0].material = material_rocks;
+					glb_3.scene.position.set(6,-1,1)
+					scene.add(glb_3.scene);})
+
+				new GLTFLoader().load('./models/gltf/standing_rock2.glb', function(glb_4){
+					console.log(glb_4);
+					glb_4.scene.children[0].material = material_rocks;
+					glb_4.scene.position.set(-5,3,1)
+					scene.add(glb_4.scene);})
+				
+				new GLTFLoader().load('./models/gltf/rock4.glb', function(glb_5){
+					console.log(glb_5);
+					glb_5.scene.children[0].material = material_rocks;
+					glb_5.scene.position.set(-2,2,2)
+					scene.add(glb_5.scene);})
+
+				new GLTFLoader().load('./models/gltf/standing_rock.glb', function(glb_6){
+					console.log(glb_6);
+					glb_6.scene.children[0].material = material_rocks;
+					glb_6.scene.position.set(-8,-1,1)
+					scene.add(glb_6.scene);})
+						
+				
+				new GLTFLoader().load('./models/gltf/standing_rock2.glb', function(glb_7){
+					console.log(glb_7);
+					glb_7.scene.children[0].material = material_rocks;
+					glb_7.scene.position.set(-8,1,3)
+					scene.add(glb_7.scene);})
+				
+				new GLTFLoader().load('./models/gltf/standing_rock3.glb', function(glb_8){
+					console.log(glb_8);
+					glb_8.scene.children[0].material = material_rocks;
+					glb_8.scene.position.set(10,1,2)
+					scene.add(glb_8.scene);})
+				
+				new GLTFLoader().load('./models/gltf/rock1.glb', function(glb_9){
+					console.log(glb_9);
+					glb_9.scene.children[0].material = material_rocks;
+					glb_9.scene.position.set(0,4,2)
+					scene.add(glb_9.scene);})
+				
+				new GLTFLoader().load('./models/gltf/rock1.glb', function(glb_10){
+					console.log(glb_10);
+					glb_10.scene.children[0].material = material_rocks;
+					glb_10.scene.position.set(0,2,2)
+					scene.add(glb_10.scene);})
+
+				new GLTFLoader().load('./models/gltf/rock3.glb', function(glb_11){
+					console.log(glb_11);
+					glb_11.scene.children[0].material = material_rocks;
+					glb_11.scene.position.set(4,3,2)
+					scene.add(glb_11.scene);})
+
+				// new GLTFLoader().load('./models/gltf/lying_rock2.glb', function(glb_5){
+				// 	console.log(glb_5);
+				// 	glb_5.scene.children[0].material = material;
+				// 	glb_5.scene.position.set(-10,14,1)
+				// 	scene.add(glb_5.scene);})
+
+	
+
+				// loader.load("./models/gltf/rock3.glb", function(glb) { 
+				// 	console.log(glb);
+				// 	glb.scene.children[0].material = material;
+
+				// 	scene.add(glb.scene);})
+				
+				// loader.load("./models/gltf/rock2.glb", function(glb) { console.log(glb);
+				// 	glb.scene.children[0].material = material;
+
+				// 	scene.add(glb.scene);}) 
+				
+				// 	loader.load("./models/gltf/rock3.glb", function(glb) { console.log(glb);
+				// 	glb.scene.children[0].material = material;
+
+				// 	scene.add(glb.scene);}) 
+
+				// 
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				container.appendChild( renderer.domElement );
+				renderer.autoClear = false;
+				
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.update();
+
+				//
+
+				const renderModel = new RenderPass( scene, camera );
+				const effectBloom = new BloomPass( 0.25 ); //1.25
+				const effectFilm = new FilmPass( 0.35, 0.4, 2048, false ); // 0.35, 0.95, 2048
+
+				composer = new EffectComposer( renderer );
+
+				composer.addPass( renderModel );
+				composer.addPass( effectBloom );
+				composer.addPass( effectFilm );
+
+				//
+
+				onWindowResize();
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				//Create a sphere that cast shadows (but does not receive them)
+				// const sphereGeometry = new THREE.SphereGeometry( 5, 32, 32 );
+				// const sphereMaterial = new THREE.MeshStandardMaterial( { color: 0xff0000 } );
+				// const sphere = new THREE.Mesh( sphereGeometry, sphereMaterial );
+				// sphere.castShadow = true; //default is false
+				// sphere.receiveShadow = false; //default
+				// scene.add( sphere );
+
+				// //Create a plane that receives shadows (but does not cast them)
+				// const planeGeometry = new THREE.PlaneGeometry( 20, 20, 32, 32 );
+				// const planeMaterial = new THREE.MeshStandardMaterial( { color: 0x00ff00 } )
+				// const plane_shadow = new THREE.Mesh( planeGeometry, planeMaterial );
+				// plane_shadow.receiveShadow = true;
+				// scene.add( plane_shadow );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				composer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+				
+
+			}
+			// time of motion in shader from here
+			function render() {
+
+				const delta = 5 * clock.getDelta();
+
+				uniforms_rocks[ 'time' ].value += 0.1 * delta;
+
+				// mesh.rotation.y += 0.0125 * delta;
+				// mesh.rotation.x += 0.05 * delta;
+
+				renderer.clear();
+				composer.render( 0.01 );
+				controls.update();
+
+			}
+
+		</script>
+
+	</body>
+</html>
